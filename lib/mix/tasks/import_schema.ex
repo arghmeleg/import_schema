@@ -50,17 +50,34 @@ defmodule Mix.Tasks.ImportSchema do
 
     ignores =
       Enum.map_join(Keyword.get_values(args, :ignore), " ", fn ignore ->
-        "AND table_name NOT LIKE '#{ignore}'"
+        "AND c.table_name NOT LIKE '#{ignore}'"
       end)
 
     repo
     |> query("
-        SELECT table_name, column_name, data_type
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
+        WITH fks AS (
+          SELECT
+            tc.table_name,
+            kcu.column_name,
+            ccu.table_name AS foreign_table_name,
+            ccu.column_name AS foreign_column_name
+          FROM
+            information_schema.table_constraints AS tc
+            JOIN information_schema.key_column_usage AS kcu
+              ON tc.constraint_name = kcu.constraint_name
+              AND tc.table_schema = kcu.table_schema
+            JOIN information_schema.constraint_column_usage AS ccu
+              ON ccu.constraint_name = tc.constraint_name
+              AND ccu.table_schema = tc.table_schema
+          WHERE tc.constraint_type = 'FOREIGN KEY'
+        )
+        SELECT c.table_name, c.column_name, c.data_type, fks.foreign_table_name, fks.foreign_column_name
+        FROM information_schema.columns c
+        LEFT OUTER JOIN fks ON fks.table_name = c.table_name AND fks.column_name = c.column_name
+        WHERE c.table_schema = 'public'
         #{ignores}
         ORDER BY
-        table_name, column_name
+        c.table_name, fks.foreign_table_name IS NULL DESC, fks.foreign_table_name, fks.foreign_column_name, c.column_name
         ")
     |> Enum.reject(&(&1.column_name == "id"))
     |> Enum.map(&Map.put(&1, :type, @type_map[&1.data_type]))
@@ -69,22 +86,33 @@ defmodule Mix.Tasks.ImportSchema do
   end
 
   defp build_model({table, columns}, args) do
-    module_name_seed =
-      if args[:strip_prefix] do
-        String.replace_prefix(table, args[:strip_prefix], "")
-      else
-        table
-      end
-
-    module_basename = module_name_seed |> Macro.camelize() |> String.trim("s")
-
-    module_name =
-      String.replace_suffix(chomp_elixir(args[:repo]), ".Repo", "") <> "." <> module_basename
+    module_name = get_module_name(table, args)
 
     filename =
-      file_path("lib/#{app_dir()}/models/", "#{String.trim_trailing(module_name_seed, "s")}.ex")
+      file_path(
+        "lib/#{app_dir()}/models/",
+        "#{String.trim_trailing(strip_prefix(table, args), "s")}.ex"
+      )
 
-    safe_write(filename, template(table, columns, module_name), args)
+    safe_write(filename, template(table, columns, module_name, args), args)
+  end
+
+  defp get_module_name(table, args) do
+    module_basename =
+      table
+      |> strip_prefix(args)
+      |> Macro.camelize()
+      |> String.trim("s")
+
+    String.replace_suffix(chomp_elixir(args[:repo]), ".Repo", "") <> "." <> module_basename
+  end
+
+  defp strip_prefix(table, args) do
+    if args[:strip_prefix] do
+      String.replace_prefix(table, args[:strip_prefix], "")
+    else
+      table
+    end
   end
 
   defp query(repo, q) do
@@ -158,9 +186,9 @@ defmodule Mix.Tasks.ImportSchema do
     Path.join([File.cwd!(), dir, filename])
   end
 
-  defp template(table, fields, module_name) do
+  defp template(table, fields, module_name, args) do
     template_fields =
-      Enum.map_join(fields, "\n", fn f -> "    field :#{f.column_name}, :#{f.type}" end)
+      Enum.map_join(fields, "\n", fn f -> "    #{field(f, args)}" end)
 
     ~s/defmodule #{module_name} do
   @moduledoc """
@@ -177,10 +205,15 @@ end
 /
   end
 
-  defp chomp_elixir(string) do
-    String.replace_prefix("#{string}", "Elixir.", "")
+  defp field(%{foreign_table_name: ft, foreign_column_name: "id"}, args) do
+    "belongs_to :#{strip_prefix(ft, args)}, #{get_module_name(ft, args)}"
   end
 
-  defp parse_args(args) do
+  defp field(f, _args) do
+    "field :#{f.column_name}, :#{f.type}"
+  end
+
+  defp chomp_elixir(string) do
+    String.replace_prefix("#{string}", "Elixir.", "")
   end
 end
