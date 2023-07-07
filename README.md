@@ -4,7 +4,7 @@
 
     $ mix import_schema
 
-This task has only been tested with Postgres and does not come with any guarantee of completeness or accuracy.
+This task has only been tested with Postgres and does not come with any guarantee of completeness or accuracy. `ImportSchema` is intended to help bootstrap the process of replatforming webapps into Elixir applications. It uses opinionated defaults that have worked for projects I've worked on. Pull requests to expand the functionality are welcome.
 
 ## Options
   * `-r`, `--repo` - the repo in your app to pull the schema from. If no repo is provided, the mix task will attempt to detect the repo and prompt the user to confirm or enter the correct repo name.
