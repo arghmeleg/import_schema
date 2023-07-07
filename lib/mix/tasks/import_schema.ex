@@ -9,8 +9,8 @@ defmodule Mix.Tasks.ImportSchema do
   """
 
   @arg_opts [
-    aliases: [r: :repo, sp: :strip_prefix, f: :force],
-    switches: [repo: :string, strip_prefix: :string, force: :boolean]
+    aliases: [r: :repo, sp: :strip_prefix, f: :force, i: :ignore],
+    switches: [repo: :string, strip_prefix: :string, force: :boolean, ignore: :keep]
   ]
 
   @start_apps [:ecto, :ecto_sql]
@@ -45,13 +45,17 @@ defmodule Mix.Tasks.ImportSchema do
       |> List.first()
       |> Keyword.put(:repo, repo)
 
-    # table = List.first(args)
+    ignores =
+      Enum.map_join(Keyword.get_values(args, :ignore), " ", fn ignore ->
+        "AND table_name NOT LIKE '#{ignore}'"
+      end)
 
     repo
     |> query("
         SELECT table_name, column_name, data_type
         FROM information_schema.columns
         WHERE table_schema = 'public'
+        #{ignores}
         ORDER BY
         table_name, column_name
         ")
@@ -70,7 +74,9 @@ defmodule Mix.Tasks.ImportSchema do
       end
 
     module_basename = module_name_seed |> Macro.camelize() |> String.trim("s")
-    module_name = String.replace_suffix(chomp_elixir(args[:repo]), ".Repo", "") <> "." <> module_basename
+
+    module_name =
+      String.replace_suffix(chomp_elixir(args[:repo]), ".Repo", "") <> "." <> module_basename
 
     filename = file_path("lib/#{app_dir()}/models/", "#{String.trim(module_name_seed, "s")}.ex")
     safe_write(filename, template(table, columns, module_name), args)
