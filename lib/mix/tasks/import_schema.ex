@@ -16,21 +16,24 @@ defmodule Mix.Tasks.ImportSchema do
   @start_apps [:ecto, :ecto_sql]
 
   @type_map %{
-    "datetime" => :utc_datetime,
+    "bytea" => :binary,
     "date" => :date,
-    "varchar" => :string,
+    "datetime" => :utc_datetime,
+    "bigint" => :integer,
+    "boolean" => :boolean,
+    "character varying" => :string,
     "float" => :float,
     "int" => :integer,
-    "tinyint" => :integer,
-    "mediumtext" => :string,
-    "longtext" => :string,
-    "text" => :string,
-    "json" => :map,
-    "boolean" => :boolean,
-    "bigint" => :integer,
     "integer" => :integer,
-    "character varying" => :string,
-    "jsonb" => :map
+    "json" => :map,
+    "jsonb" => :map,
+    "longtext" => :string,
+    "mediumtext" => :string,
+    "text" => :string,
+    "tinyint" => :integer,
+    "timestamp with time zone" => :utc_datetime_usec,
+    "timestamp without time zone" => :utc_datetime,
+    "varchar" => :string
   }
 
   @requirements ["app.config"]
@@ -78,7 +81,9 @@ defmodule Mix.Tasks.ImportSchema do
     module_name =
       String.replace_suffix(chomp_elixir(args[:repo]), ".Repo", "") <> "." <> module_basename
 
-    filename = file_path("lib/#{app_dir()}/models/", "#{String.trim(module_name_seed, "s")}.ex")
+    filename =
+      file_path("lib/#{app_dir()}/models/", "#{String.trim_trailing(module_name_seed, "s")}.ex")
+
     safe_write(filename, template(table, columns, module_name), args)
   end
 
