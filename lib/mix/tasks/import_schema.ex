@@ -8,7 +8,10 @@ defmodule Mix.Tasks.ImportSchema do
   `mix import_schema`
   """
 
-  @arg_opts [aliases: [r: :repo], switches: [repo: :string, strip_prefix: :string]]
+  @arg_opts [
+    aliases: [r: :repo, sp: :strip_prefix, f: :force],
+    switches: [repo: :string, strip_prefix: :string, force: :boolean]
+  ]
 
   @start_apps [:ecto, :ecto_sql]
 
@@ -29,43 +32,20 @@ defmodule Mix.Tasks.ImportSchema do
     "character varying" => :string,
     "jsonb" => :map
   }
+
   @requirements ["app.config"]
-  def run(args_string) do
-    # Mix.Task.run("app.start")
 
-    args = parse_args(args_string)
+  def run(args_input) do
+    repo = get_repo(args_input)
+
+    args =
+      args_input
+      |> OptionParser.parse(@arg_opts)
+      |> Tuple.to_list()
+      |> List.first()
+      |> Keyword.put(:repo, repo)
+
     # table = List.first(args)
-    # repo = List.first(args)
-    IO.inspect(args)
-    # Application.loaded_applications() |> IO.inspect()
-    # File.cwd!() |> IO.jinspect()
-    repo = get_repo(args)
-    # IO.inspect(get_repo(args))
-    # Enum.each(@start_apps, &Application.ensure_all_started/1) |> IO.inspect
-    # repo_pid = repo.connect()
-    # Application.ensure_started(repo_pid, [])
-    # Mix.Ecto.ensure_started(repo, [])
-    # WHERE table_name = '#{table}'
-
-    Mix.Ecto.ensure_repo(repo, []) |> IO.inspect()
-
-    # config = repo.config()
-    # mode = Keyword.get([], :mode, :permanent)
-    # apps = [:ecto_sql | config[:start_apps_before_migration] || []]
-    #
-    # extra_started =
-    #   Enum.flat_map(apps, fn app ->
-    #     {:ok, started} = Application.ensure_all_started(app, mode)
-    #     started
-    #   end)
-    #
-    # {:ok, repo_started} = repo.__adapter__().ensure_all_started(config, mode) |> IO.inspect()
-
-    # Mix.Ecto.parse_repo([""])
-
-    # {:ok, pid} = repo.start_link(pool_size: 1) |> IO.inspect()
-
-    IO.inspect(Stix.Repo.config())
 
     repo
     |> query("
@@ -81,10 +61,19 @@ defmodule Mix.Tasks.ImportSchema do
     |> Enum.each(&build_model(&1, args))
   end
 
-  defp build_model({table, columns}, _args) do
-    filename = file_path("lib/#{app_dir()}/models/", "#{String.trim(table, "s")}.ex")
-    IO.puts(filename)
-    safe_write(filename, template(table, columns, Macro.camelize(app_dir())))
+  defp build_model({table, columns}, args) do
+    module_name_seed =
+      if args[:strip_prefix] do
+        String.replace_prefix(table, args[:strip_prefix], "")
+      else
+        table
+      end
+
+    module_basename = module_name_seed |> Macro.camelize() |> String.trim("s")
+    module_name = String.replace_suffix(chomp_elixir(args[:repo]), ".Repo", "") <> "." <> module_basename
+
+    filename = file_path("lib/#{app_dir()}/models/", "#{String.trim(module_name_seed, "s")}.ex")
+    safe_write(filename, template(table, columns, module_name), args)
   end
 
   defp query(repo, q) do
@@ -97,36 +86,40 @@ defmodule Mix.Tasks.ImportSchema do
     Enum.map(rows, fn r -> Enum.into(Enum.zip(atom_cols, r), %{}) end)
   end
 
-  defp get_repo(%{repo: repo}) do
-    :FIXME_HANDLE_ERROR
-    String.to_existing_atom(repo)
-  end
-
   defp app_dir do
     Path.basename(File.cwd!())
   end
 
-  defp get_repo(args) do
-    string_app = Macro.camelize(app_dir())
+  defp get_repo(args_string) do
+    potential_repos =
+      args_string
+      |> Mix.Ecto.parse_repo()
+      |> Enum.map(fn maybe_repo ->
+        try do
+          Mix.Ecto.ensure_repo(maybe_repo, [])
+        rescue
+          _ -> nil
+        end
+      end)
+      |> Enum.filter(& &1)
 
-    try do
-      repo_guess = String.to_existing_atom("Elixir." <> string_app <> ".Repo")
-      expected_repo_guess = String.replace_prefix("#{repo_guess}", "Elixir.", "")
+    repo_guess = List.first(potential_repos)
 
-      IO.puts("No repo given, guessing #{green(expected_repo_guess)}?")
+    resp =
+      if repo_guess do
+        IO.puts("Guessing #{green(chomp_elixir(repo_guess))}?")
 
-      resp =
-        "Press enter to continue or enter correct MyApp.Repo to continue: "
-        |> IO.gets()
-        |> String.trim()
-
-      if resp == "" do
-        repo_guess
+        "Enter a different MyApp.Repo or press [enter] to continue: "
       else
-        args |> Map.put(:repo, resp) |> get_repo()
+        "Please enter a valid MyApp.Repo to continue: "
       end
-    rescue
-      RuntimeError -> :FIXME
+      |> IO.gets()
+      |> String.trim()
+
+    if resp == "" && repo_guess do
+      repo_guess
+    else
+      get_repo(["-r", resp])
     end
   end
 
@@ -142,11 +135,11 @@ defmodule Mix.Tasks.ImportSchema do
     "#{apply(IO.ANSI, color, [])}#{text}#{IO.ANSI.reset()}"
   end
 
-  defp safe_write(filename, content) do
-    if !File.exists?(filename) ||
+  defp safe_write(filename, content, args) do
+    if !File.exists?(filename) || args[:force] ||
          IO.gets("#{green(filename)} aready exists. Overwrite? [y/N] ") == "y\n" do
       File.write(filename, content)
-      IO.puts("Created #{blue(filename)}")
+      IO.puts("Wrote to #{blue(filename)}")
     end
   end
 
@@ -154,33 +147,29 @@ defmodule Mix.Tasks.ImportSchema do
     Path.join([File.cwd!(), dir, filename])
   end
 
-  defp template(name, fields, repo) do
-    IO.inspect(fields)
-    module_name = name |> Macro.camelize() |> String.trim("s")
-
+  defp template(table, fields, module_name) do
     template_fields =
       Enum.map_join(fields, "\n", fn f -> "    field :#{f.column_name}, :#{f.type}" end)
 
-    ~s/defmodule #{repo}.#{module_name} do
+    ~s/defmodule #{module_name} do
   @moduledoc """
-  Ecto model representing `#{name}` schema.
+  Ecto model representing `#{table}` schema.
   """
   use Ecto.Schema
 
   @type t :: %__MODULE__{}
 
-  schema "#{name}" do
+  schema "#{table}" do
 #{template_fields}
   end
 end
 /
   end
 
+  defp chomp_elixir(string) do
+    String.replace_prefix("#{string}", "Elixir.", "")
+  end
+
   defp parse_args(args) do
-    args
-    |> OptionParser.parse(@arg_opts)
-    |> Tuple.to_list()
-    |> List.first()
-    |> Enum.into(%{})
   end
 end
