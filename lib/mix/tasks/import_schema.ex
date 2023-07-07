@@ -1,19 +1,15 @@
 defmodule Mix.Tasks.ImportSchema do
   @moduledoc """
   Generates models from database schema
-  """
-  use Mix.Task
 
-  @doc """
   `mix import_schema`
   """
+  use Mix.Task
 
   @arg_opts [
     aliases: [r: :repo, sp: :strip_prefix, f: :force, i: :ignore],
     switches: [repo: :string, strip_prefix: :string, force: :boolean, ignore: :keep]
   ]
-
-  @start_apps [:ecto, :ecto_sql]
 
   @type_map %{
     "bytea" => :binary,
@@ -35,8 +31,6 @@ defmodule Mix.Tasks.ImportSchema do
     "timestamp without time zone" => :utc_datetime,
     "varchar" => :string
   }
-
-  @requirements ["app.config"]
 
   def run(args_input) do
     repo = get_repo(args_input)
